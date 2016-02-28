@@ -1,2 +1,3 @@
 # guth
-Auth for Golang
+
+Stateless authentication in golang
