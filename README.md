@@ -1,6 +1,8 @@
 # Guth
 > Simple, Stateless, Secure
 
+[![GoDoc](https://godoc.org/github.com/Huijari/guth?status.svg)](https://godoc.org/github.com/Huijari/guth)
+
 Guth implements a secure stateless authentication in golang.
 
 ## Installation
