@@ -1,115 +1,114 @@
-// Guth, stateless authentication in golang
-package main
+/*
+Guth implements a secure stateless authentication in golang.
+
+Creation:
+	payload := Payload{
+	  Content: "6ba7b810-9dad-11d2-80b4-00c04fd430c8", // Eg. user id
+	  Created: time.Now(), // Date of creation (of the token)
+	}
+
+Encrypt:
+	key := []byte("0123456789abcdef") // AES key
+	token, err := payload.Encrypt(key)
+	if err != nil {
+	  log.Fatal("Encrypt error", err)
+	}
+
+Decrypt:
+	err = payload.Decrypt(token, key)
+	if err != nil {
+	  log.Fatal("Decrypt error", err)
+	}
+*/
+package guth
 
 import (
 	"bytes"
-	"crypto/hmac"
-	"crypto/sha512"
-	"encoding/base64"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/json"
 	"errors"
-	"fmt"
+	"io"
 	"time"
 )
 
-var Config struct {
-	period    time.Duration
-	key       []byte
-	separator []byte
+// What the token will carry
+type Payload struct {
+	Content string
+	Created time.Time
 }
 
-type token struct {
-	content   []byte
-	expires   time.Time
-	signature []byte
-}
+// Marshal payload to []byte
+func (this Payload) MarshalBinary() (result []byte, err error) {
+	var buffer bytes.Buffer
 
-func generateToken(content []byte) (generated token) {
-	generated = token{}
-	generated.content = content
-	generated.expires = time.Now().Add(Config.period)
-
-	mac := hmac.New(sha512.New, Config.key)
-	mac.Write(generated.content)
-	mac.Write([]byte(generated.expires.Format(time.RFC3339)))
-	generated.signature = mac.Sum(nil)
+	encoder := json.NewEncoder(&buffer)
+	err = encoder.Encode(this)
+	result = buffer.Bytes()
 	return
 }
 
-func decodeToken(encoded string) (decoded token, err error) {
-	encoded_bytes, err := base64.StdEncoding.DecodeString(encoded)
+// Unmarshal payload from []byte
+func (this *Payload) UnmarshalBinary(data []byte) (err error) {
+	var buffer bytes.Buffer
+	buffer.Write(data)
+
+	decoded := Payload{}
+	decoder := json.NewDecoder(&buffer)
+	err = decoder.Decode(&decoded)
 	if err != nil {
 		return
 	}
 
-	properties := bytes.SplitN(encoded_bytes, Config.separator, 3)
-	decoded.content = properties[0]
-	decoded.expires, err = time.Parse(time.RFC3339, string(properties[1]))
+	this.Content = decoded.Content
+	this.Created = decoded.Created
+	return
+}
+
+// Generate token from payload using an AES key
+func (this Payload) Encrypt(key []byte) (result []byte, err error) {
+	plaintext, err := this.MarshalBinary()
 	if err != nil {
 		return
 	}
-	decoded.signature = properties[2]
-	return
-}
 
-func (this token) encode() (encoded string) {
-	to_encode := bytes.Join([][]byte{
-		this.content,
-		[]byte(this.expires.Format(time.RFC3339)),
-		this.signature,
-	}, Config.separator)
-	encoded = base64.StdEncoding.EncodeToString(to_encode)
-	return
-}
-
-func (this token) validate() (content []byte, err error) {
-	if this.expires.Before(time.Now()) {
-		err = errors.New("Expired token")
-		return
-	}
-
-	mac := hmac.New(sha512.New, Config.key)
-	mac.Write(this.content)
-	mac.Write([]byte(this.expires.Format(time.RFC3339)))
-	signature := mac.Sum(nil)
-	if bytes.Compare(this.signature, signature) != 0 {
-		err = errors.New("Invalid signature")
-		return
-	}
-
-	content = this.content
-	return
-}
-
-// Wrap content in encoded token
-func Wrap(content []byte) (wrapped string) {
-	token := generateToken(content)
-	wrapped = token.encode()
-	return
-}
-
-// Retrieve content of encoded token
-func Unwrap(wrapped string) (content []byte, err error) {
-	decoded, err := decodeToken(wrapped)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return
 	}
-	content, err = decoded.validate()
+
+	ciphertext := make([]byte, aes.BlockSize+len(plaintext))
+	iv := ciphertext[:aes.BlockSize]
+	_, err = io.ReadFull(rand.Reader, iv)
+	if err != nil {
+		return
+	}
+
+	stream := cipher.NewCFBEncrypter(block, iv)
+	stream.XORKeyStream(ciphertext[aes.BlockSize:], plaintext)
+
+	result = ciphertext
 	return
 }
 
-func mainr() {
-	id := "123"
-	token := Wrap([]byte(id))
-	fmt.Println(token)
-
-	_, err := Unwrap(token)
+// Retrieve payload from token using an AES key
+func (this *Payload) Decrypt(encrypted []byte, key []byte) (err error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		fmt.Println(err.Error())
+		return
 	}
-}
 
-func init() {
-	Config.period, _ = time.ParseDuration("10m")
-	Config.key = []byte("dc1dbbc084688dd2")
-	Config.separator = []byte("#SEP#")
+	if len(encrypted) < aes.BlockSize {
+		err = errors.New("ciphertext too sort")
+		return
+	}
+	iv := encrypted[:aes.BlockSize]
+	ciphertext := encrypted[aes.BlockSize:]
+
+	stream := cipher.NewCFBDecrypter(block, iv)
+	stream.XORKeyStream(ciphertext, ciphertext)
+
+	this.UnmarshalBinary(ciphertext)
+	return
 }
