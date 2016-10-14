@@ -32,7 +32,7 @@ Decrypt:
     }
 
 ## Notice
-This package is under development, changes to the api may occur.
+This package isn't under development.
 
 ## Meta
 Distributed under the MIT license. See ``LICENSE`` for more information.
